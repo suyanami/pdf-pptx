@@ -112,17 +112,19 @@ export async function generatePPTXFromRegions(file, allRegions, pageCount, onPro
                     const ocrResult = await ocrRegion(cropped.imageData);
 
                     if (ocrResult.text) {
+                        // Clean up OCR text
+                        const cleanedText = normalizeOCRText(ocrResult.text);
+
                         // Estimate text color from OCR (dark text assumed for now)
-                        // Future: could analyze image pixels to detect actual text color
                         const textColor = detectTextColor(cropped.imageData);
 
                         // Calculate font size based on region height and number of lines
-                        const lines = ocrResult.text.split('\n').filter(l => l.trim());
+                        const lines = cleanedText.split('\n').filter(l => l.trim());
                         const estimatedFontSize = Math.max(8, Math.min(48,
                             Math.round((h * 72) / Math.max(1, lines.length) * 0.7)
                         ));
 
-                        slide.addText(ocrResult.text, {
+                        slide.addText(cleanedText, {
                             x: x,
                             y: y,
                             w: w,
@@ -181,4 +183,45 @@ function detectTextColor(imageData) {
     // This is a placeholder - true color detection would require canvas analysis
 
     return '000000'; // Default to black
+}
+
+/**
+ * Normalize OCR text by removing unwanted spaces and line breaks
+ * @param {string} text - Raw OCR text
+ * @returns {string} Cleaned text
+ */
+function normalizeOCRText(text) {
+    if (!text) return '';
+
+    let result = text;
+
+    // Remove multiple spaces (but keep single spaces between English words)
+    result = result.replace(/  +/g, ' ');
+
+    // Remove spaces between Japanese characters (OCR often adds unwanted spaces)
+    // Japanese character ranges: Hiragana, Katakana, CJK
+    result = result.replace(/([\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF])\s+([\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF])/g, '$1$2');
+
+    // Remove space after Japanese punctuation
+    result = result.replace(/([。、！？）」』])\s+/g, '$1');
+
+    // Remove space before Japanese punctuation
+    result = result.replace(/\s+([。、！？（「『])/g, '$1');
+
+    // Normalize line breaks - remove single line breaks within paragraphs
+    // Keep double line breaks as paragraph separators
+    result = result.replace(/([^\n])\n([^\n])/g, '$1 $2');
+
+    // Remove multiple consecutive line breaks (keep max 2)
+    result = result.replace(/\n{3,}/g, '\n\n');
+
+    // Trim each line
+    result = result.split('\n').map(line => line.trim()).join('\n');
+
+    // Remove leading/trailing whitespace
+    result = result.trim();
+
+    console.log('[PPTX] Text normalized:', result.substring(0, 50) + '...');
+
+    return result;
 }
