@@ -111,60 +111,52 @@ export async function generatePPTXFromRegions(file, allRegions, pageCount, onPro
                     // OCR and add as text box with detected style
                     const ocrResult = await ocrRegion(cropped.imageData);
 
-                    if (ocrResult.text) {
-                        // Clean up OCR text
-                        const cleanedText = normalizeOCRText(ocrResult.text);
-
+                    if (ocrResult.text && ocrResult.lines.length > 0) {
                         // Detect text color (default black for now)
                         const textColor = detectTextColor(cropped.imageData);
 
-                        // Calculate font size from Tesseract line info
-                        let detectedFontSize = 14; // Default
+                        // Use line-level bboxes for accurate placement
+                        const imageHeight = cropped.height;
+                        const imageWidth = cropped.width;
 
-                        if (ocrResult.lines && ocrResult.lines.length > 0) {
-                            // Get average word height from Tesseract bounding boxes
-                            const wordHeights = [];
-                            for (const line of ocrResult.lines) {
-                                if (line.words) {
-                                    for (const word of line.words) {
-                                        if (word.bbox) {
-                                            const wordHeight = word.bbox.y1 - word.bbox.y0;
-                                            if (wordHeight > 5) { // Ignore noise
-                                                wordHeights.push(wordHeight);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                        // Track quality metrics
+                        let totalConf = 0;
+                        let lineCount = 0;
 
-                            if (wordHeights.length > 0) {
-                                // Average word height in pixels
-                                const avgWordHeight = wordHeights.reduce((a, b) => a + b, 0) / wordHeights.length;
+                        for (const line of ocrResult.lines) {
+                            if (!line.bbox || !line.text.trim()) continue;
 
-                                // Convert to points: word height / image height * region height in inches * 72
-                                // Note: cropped.width/height contains actual image dimensions
-                                const imageHeight = cropped.height || region.height;
-                                const fontSizePoints = (avgWordHeight / imageHeight) * h * 72;
+                            // Convert line bbox (in cropped image pixels) to PPTX coordinates
+                            const lineX = x + (line.bbox.x0 / imageWidth) * w;
+                            const lineY = y + (line.bbox.y0 / imageHeight) * h;
+                            const lineW = ((line.bbox.x1 - line.bbox.x0) / imageWidth) * w;
+                            const lineH = ((line.bbox.y1 - line.bbox.y0) / imageHeight) * h;
 
-                                // Apply correction factor (Tesseract bbox tends to be slightly larger than font)
-                                detectedFontSize = Math.max(8, Math.min(72, Math.round(fontSizePoints * 0.85)));
+                            // Calculate font size from line height
+                            const lineHeightPx = line.bbox.y1 - line.bbox.y0;
+                            const fontSizePoints = (lineHeightPx / imageHeight) * h * 72 * 0.75;
+                            const fontSize = Math.max(8, Math.min(72, Math.round(fontSizePoints)));
 
-                                console.log(`[PPTX] Font detection: avgWordHeight=${avgWordHeight.toFixed(1)}px, imageHeight=${imageHeight}, regionH=${h.toFixed(2)}in -> ${detectedFontSize}pt`);
-                            }
+                            // Normalize the line text
+                            const lineText = normalizeOCRText(line.text);
+
+                            slide.addText(lineText, {
+                                x: lineX,
+                                y: lineY,
+                                w: lineW + 0.1, // Small buffer for text overflow
+                                h: lineH + 0.05,
+                                fontSize: fontSize,
+                                fontFace: 'Arial',
+                                color: textColor,
+                                valign: 'top',
+                                wrap: false // No wrap for single lines
+                            });
+
+                            totalConf += line.conf;
+                            lineCount++;
                         }
 
-                        slide.addText(cleanedText, {
-                            x: x,
-                            y: y,
-                            w: w,
-                            h: h,
-                            fontSize: detectedFontSize,
-                            fontFace: 'Arial',
-                            color: textColor,
-                            valign: 'top',
-                            wrap: true
-                        });
-                        console.log(`[PPTX] Added text (${detectedFontSize}pt, #${textColor}): "${ocrResult.text.substring(0, 40)}..."`)
+                        console.log(`[PPTX] Added ${lineCount} text lines, avgConf: ${lineCount > 0 ? (totalConf / lineCount).toFixed(1) : 0}%`)
                     } else {
                         // Fallback to image if OCR fails
                         console.log('[PPTX] OCR failed, using image fallback');
@@ -192,7 +184,16 @@ export async function generatePPTXFromRegions(file, allRegions, pageCount, onPro
     onProgress({ percent: 95, message: 'PPTXファイルを生成中...' });
     const blob = await pptx.write({ outputType: 'blob' });
 
-    console.log(`[PPTX] Generated: ${(blob.size / 1024).toFixed(1)} KB`);
+    // Quality metrics summary
+    console.log('='.repeat(50));
+    console.log('[PPTX] Generation Complete - Quality Report');
+    console.log(`  Total pages: ${pageCount}`);
+    console.log(`  File size: ${(blob.size / 1024).toFixed(1)} KB`);
+    console.log(`  Total regions processed: ${Object.values(allRegions).flat().length}`);
+    const textRegions = Object.values(allRegions).flat().filter(r => r.type === 'text').length;
+    const imageRegions = Object.values(allRegions).flat().filter(r => r.type === 'image').length;
+    console.log(`  Text regions: ${textRegions}, Image regions: ${imageRegions}`);
+    console.log('='.repeat(50));
 
     return blob;
 }

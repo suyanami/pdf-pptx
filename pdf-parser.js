@@ -50,6 +50,42 @@ export async function renderPagePreview(file, pageNum, canvas, maxWidth = 600) {
 }
 
 /**
+ * Check if a PDF page is structured (has extractable text) or image-based
+ * @param {File} file - PDF file
+ * @param {number} pageNum - Page number
+ * @returns {Promise<Object>} { type: 'structured'|'image-based', textLength, itemCount }
+ */
+export async function checkPageType(file, pageNum) {
+    const pdf = await getPdfDocument(file);
+    const page = await pdf.getPage(pageNum);
+
+    try {
+        const textContent = await page.getTextContent();
+        const items = textContent.items || [];
+
+        // Calculate total text length
+        const totalText = items.map(item => item.str || '').join('');
+        const textLength = totalText.replace(/\s+/g, '').length;
+
+        // Threshold: if less than 50 chars, consider it image-based
+        const threshold = 50;
+        const type = textLength >= threshold ? 'structured' : 'image-based';
+
+        console.log(`[PDF Parser] Page ${pageNum} type: ${type} (${textLength} chars, ${items.length} items)`);
+
+        return {
+            type,
+            textLength,
+            itemCount: items.length,
+            textItems: type === 'structured' ? items : [] // Return items for structured pages
+        };
+    } catch (err) {
+        console.error('[PDF Parser] Error checking page type:', err);
+        return { type: 'image-based', textLength: 0, itemCount: 0, textItems: [] };
+    }
+}
+
+/**
  * Get page count
  */
 export async function getPageCount(file) {
@@ -138,11 +174,14 @@ export async function cropRegion(file, pageNum, region, canvasWidth, canvasHeigh
 
 /**
  * Perform OCR on a cropped region
+ * Returns line-level bboxes for accurate PPTX text placement
+ * @param {string} imageData - Base64 image data URL
+ * @returns {Promise<Object>} { text, lines: [{ text, bbox: {x0,y0,x1,y1}, conf }], avgConf }
  */
 export async function ocrRegion(imageData) {
     if (typeof Tesseract === 'undefined') {
         console.error('[PDF Parser] Tesseract not available');
-        return { text: '', lines: [] };
+        return { text: '', lines: [], avgConf: 0 };
     }
 
     console.log('[OCR] Starting recognition...');
@@ -153,15 +192,47 @@ export async function ocrRegion(imageData) {
         await worker.terminate();
 
         const text = result.data.text || '';
-        console.log('[OCR] Recognized text:', text.substring(0, 100));
+        const rawLines = result.data.lines || [];
+
+        // Extract line-level information with bboxes
+        const lines = rawLines.map(line => ({
+            text: line.text?.trim() || '',
+            bbox: line.bbox ? {
+                x0: line.bbox.x0,
+                y0: line.bbox.y0,
+                x1: line.bbox.x1,
+                y1: line.bbox.y1
+            } : null,
+            conf: line.confidence || 0,
+            words: (line.words || []).map(word => ({
+                text: word.text,
+                bbox: word.bbox ? {
+                    x0: word.bbox.x0,
+                    y0: word.bbox.y0,
+                    x1: word.bbox.x1,
+                    y1: word.bbox.y1
+                } : null,
+                conf: word.confidence || 0
+            }))
+        })).filter(line => line.text.length > 0);
+
+        // Calculate average confidence
+        const avgConf = lines.length > 0
+            ? lines.reduce((sum, l) => sum + l.conf, 0) / lines.length
+            : 0;
+
+        console.log(`[OCR] Recognized ${lines.length} lines, avgConf: ${avgConf.toFixed(1)}%`);
+        console.log('[OCR] Sample text:', text.substring(0, 80));
 
         return {
             text: text.trim(),
-            lines: result.data.lines || []
+            lines,
+            avgConf,
+            rawData: result.data // Keep raw data for debugging
         };
     } catch (err) {
         console.error('[OCR] Error:', err);
-        return { text: '', lines: [] };
+        return { text: '', lines: [], avgConf: 0 };
     }
 }
 
