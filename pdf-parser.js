@@ -237,6 +237,76 @@ export async function ocrRegion(imageData) {
 }
 
 /**
+ * Extract text using Ollama LLaVA (Vision Language Model)
+ * Requires ollama_server.py to be running on port 5000
+ * @param {string} imageData - Base64 image data URL
+ * @returns {Promise<Object>} { text, lines, avgConf, model }
+ */
+export async function vlmExtractText(imageData) {
+    const VLM_API_URL = 'http://localhost:5000/api/extract-text';
+
+    console.log('[VLM] Starting LLaVA extraction...');
+
+    try {
+        const response = await fetch(VLM_API_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ image: imageData })
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || `HTTP ${response.status}`);
+        }
+
+        const result = await response.json();
+
+        console.log(`[VLM] Extracted ${result.lines?.length || 0} lines using ${result.model}`);
+        console.log('[VLM] Sample text:', (result.text || '').substring(0, 80));
+
+        return {
+            text: result.text || '',
+            lines: (result.lines || []).map((line, idx) => ({
+                text: line.text,
+                bbox: null, // VLM doesn't provide bbox
+                conf: line.conf || 95,
+                index: idx
+            })),
+            avgConf: result.avgConf || 95,
+            model: result.model || 'llava'
+        };
+    } catch (err) {
+        console.error('[VLM] Error:', err.message);
+        console.log('[VLM] Falling back to Tesseract OCR...');
+        // Fallback to Tesseract OCR
+        return ocrRegion(imageData);
+    }
+}
+
+/**
+ * Check if VLM (Ollama) is available
+ * @returns {Promise<boolean>}
+ */
+export async function isVLMAvailable() {
+    try {
+        const response = await fetch('http://localhost:5000/api/health', {
+            method: 'GET',
+            timeout: 3000
+        });
+        if (response.ok) {
+            const data = await response.json();
+            console.log('[VLM] Ollama available, models:', data.models);
+            return data.status === 'ok';
+        }
+    } catch (err) {
+        console.log('[VLM] Ollama not available');
+    }
+    return false;
+}
+
+/**
  * Extract background color from a PDF page
  * Samples the corners and edges to determine the dominant background color
  */

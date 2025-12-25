@@ -77,6 +77,15 @@
                                 🖼️ 画像
                             </button>
                         </div>
+                        <span class="mode-label" style="margin-left: 20px;">抽出:</span>
+                        <div class="mode-toggle">
+                            <button class="btn-mode active" id="btnOcrMode" data-extract="ocr" title="Tesseract OCR">
+                                📝 OCR
+                            </button>
+                            <button class="btn-mode" id="btnVlmMode" data-extract="vlm" title="Ollama LLaVA (要サーバー起動)">
+                                🤖 VLM
+                            </button>
+                        </div>
                     </div>
                     <div class="toolbar-right">
                         <button class="btn-tool" id="btnClearPage" title="このページの選択をクリア">

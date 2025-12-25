@@ -2,9 +2,30 @@
  * PPTX Generator Module
  * Creates PowerPoint presentations from user-selected regions
  * With background color extraction and improved text styling
+ * Supports both Tesseract OCR and Ollama LLaVA VLM for text extraction
  */
 
-import { cropRegion, ocrRegion, getPageDimensions, getPageBackgroundColor } from './pdf-parser.js';
+import { cropRegion, ocrRegion, vlmExtractText, isVLMAvailable, getPageDimensions, getPageBackgroundColor } from './pdf-parser.js';
+
+// Text extraction mode: 'vlm' or 'ocr'
+let textExtractionMode = 'ocr';
+
+/**
+ * Set text extraction mode
+ * @param {'vlm'|'ocr'} mode
+ */
+export function setTextExtractionMode(mode) {
+    textExtractionMode = mode;
+    console.log(`[PPTX] Text extraction mode set to: ${mode}`);
+}
+
+/**
+ * Get current text extraction mode
+ * @returns {'vlm'|'ocr'}
+ */
+export function getTextExtractionMode() {
+    return textExtractionMode;
+}
 
 /**
  * Generate PPTX from user-selected regions
@@ -108,14 +129,17 @@ export async function generatePPTXFromRegions(file, allRegions, pageCount, onPro
                         h: h
                     });
                 } else {
-                    // OCR and add as text box with detected style
-                    const ocrResult = await ocrRegion(cropped.imageData);
+                    // Extract text using VLM or OCR based on mode
+                    const extractResult = textExtractionMode === 'vlm'
+                        ? await vlmExtractText(cropped.imageData)
+                        : await ocrRegion(cropped.imageData);
 
-                    if (ocrResult.text && ocrResult.lines.length > 0) {
+                    if (extractResult.text && (extractResult.lines.length > 0 || extractResult.text.length > 0)) {
                         // Detect text color (default black for now)
                         const textColor = detectTextColor(cropped.imageData);
 
-                        // Use line-level bboxes for accurate placement
+                        // Use line-level bboxes for accurate placement (OCR mode)
+                        // Or simple text block placement (VLM mode)
                         const imageHeight = cropped.height;
                         const imageWidth = cropped.width;
 
@@ -123,40 +147,67 @@ export async function generatePPTXFromRegions(file, allRegions, pageCount, onPro
                         let totalConf = 0;
                         let lineCount = 0;
 
-                        for (const line of ocrResult.lines) {
-                            if (!line.bbox || !line.text.trim()) continue;
+                        // Check if we have bbox info (OCR) or just text (VLM)
+                        const hasBbox = extractResult.lines.some(l => l.bbox);
 
-                            // Convert line bbox (in cropped image pixels) to PPTX coordinates
-                            const lineX = x + (line.bbox.x0 / imageWidth) * w;
-                            const lineY = y + (line.bbox.y0 / imageHeight) * h;
-                            const lineW = ((line.bbox.x1 - line.bbox.x0) / imageWidth) * w;
-                            const lineH = ((line.bbox.y1 - line.bbox.y0) / imageHeight) * h;
+                        if (hasBbox) {
+                            // OCR mode: place each line at its detected position
+                            for (const line of extractResult.lines) {
+                                if (!line.bbox || !line.text.trim()) continue;
 
-                            // Calculate font size from line height
-                            const lineHeightPx = line.bbox.y1 - line.bbox.y0;
-                            const fontSizePoints = (lineHeightPx / imageHeight) * h * 72 * 0.75;
-                            const fontSize = Math.max(8, Math.min(72, Math.round(fontSizePoints)));
+                                // Convert line bbox (in cropped image pixels) to PPTX coordinates
+                                const lineX = x + (line.bbox.x0 / imageWidth) * w;
+                                const lineY = y + (line.bbox.y0 / imageHeight) * h;
+                                const lineW = ((line.bbox.x1 - line.bbox.x0) / imageWidth) * w;
+                                const lineH = ((line.bbox.y1 - line.bbox.y0) / imageHeight) * h;
 
-                            // Normalize the line text
-                            const lineText = normalizeOCRText(line.text);
+                                // Calculate font size from line height
+                                const lineHeightPx = line.bbox.y1 - line.bbox.y0;
+                                const fontSizePoints = (lineHeightPx / imageHeight) * h * 72 * 0.75;
+                                const fontSize = Math.max(8, Math.min(72, Math.round(fontSizePoints)));
 
-                            slide.addText(lineText, {
-                                x: lineX,
-                                y: lineY,
-                                w: lineW + 0.1, // Small buffer for text overflow
-                                h: lineH + 0.05,
+                                // Normalize the line text
+                                const lineText = normalizeOCRText(line.text);
+
+                                slide.addText(lineText, {
+                                    x: lineX,
+                                    y: lineY,
+                                    w: lineW + 0.1,
+                                    h: lineH + 0.05,
+                                    fontSize: fontSize,
+                                    fontFace: 'Arial',
+                                    color: textColor,
+                                    valign: 'top',
+                                    wrap: false
+                                });
+
+                                totalConf += line.conf;
+                                lineCount++;
+                            }
+                        } else {
+                            // VLM mode: place all text in a single text box
+                            const cleanedText = normalizeOCRText(extractResult.text);
+                            const lineCountEst = cleanedText.split('\n').filter(l => l.trim()).length || 1;
+                            const fontSize = Math.max(8, Math.min(36, Math.round(h * 72 / lineCountEst * 0.6)));
+
+                            slide.addText(cleanedText, {
+                                x: x,
+                                y: y,
+                                w: w,
+                                h: h,
                                 fontSize: fontSize,
                                 fontFace: 'Arial',
                                 color: textColor,
                                 valign: 'top',
-                                wrap: false // No wrap for single lines
+                                wrap: true
                             });
 
-                            totalConf += line.conf;
-                            lineCount++;
+                            lineCount = lineCountEst;
+                            totalConf = extractResult.avgConf || 95;
                         }
 
-                        console.log(`[PPTX] Added ${lineCount} text lines, avgConf: ${lineCount > 0 ? (totalConf / lineCount).toFixed(1) : 0}%`)
+                        const mode = hasBbox ? 'OCR' : 'VLM';
+                        console.log(`[PPTX] Added ${lineCount} text lines (${mode}), avgConf: ${lineCount > 0 ? (totalConf / Math.max(1, lineCount)).toFixed(1) : 0}%`)
                     } else {
                         // Fallback to image if OCR fails
                         console.log('[PPTX] OCR failed, using image fallback');

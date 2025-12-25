@@ -4,7 +4,7 @@
  */
 
 import { renderPagePreview, getPageCount, cropRegion } from './pdf-parser.js';
-import { generatePPTXFromRegions } from './pptx-generator.js';
+import { generatePPTXFromRegions, setTextExtractionMode } from './pptx-generator.js';
 import { formatFileSize, downloadBlob, isValidPDF, generateOutputFileName, showError } from './utils.js';
 import { RegionEditor } from './region-editor.js';
 import { AutoDetector } from './auto-detector.js';
@@ -85,6 +85,25 @@ function setupEventListeners() {
     elements.btnTextMode.addEventListener('click', () => setMode('text'));
     elements.btnImageMode.addEventListener('click', () => setMode('image'));
     elements.btnClearPage.addEventListener('click', clearCurrentPage);
+
+    // Extraction mode toggle (OCR / VLM)
+    const btnOcrMode = document.getElementById('btnOcrMode');
+    const btnVlmMode = document.getElementById('btnVlmMode');
+    if (btnOcrMode) {
+        btnOcrMode.addEventListener('click', () => {
+            setTextExtractionMode('ocr');
+            btnOcrMode.classList.add('active');
+            btnVlmMode?.classList.remove('active');
+        });
+    }
+    if (btnVlmMode) {
+        btnVlmMode.addEventListener('click', () => {
+            setTextExtractionMode('vlm');
+            btnVlmMode.classList.add('active');
+            btnOcrMode?.classList.remove('active');
+            alert('VLMモードを使用するには、ターミナルで以下を実行してください:\n\npython ollama_server.py');
+        });
+    }
 
     // Navigation
     elements.prevPage.addEventListener('click', () => navigatePage(-1));
