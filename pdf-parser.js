@@ -97,7 +97,7 @@ export async function cropRegion(file, pageNum, region, canvasWidth, canvasHeigh
     };
 
     // Render the page at high resolution for cropping
-    const renderScale = 2;
+    const renderScale = 4; // Higher scale for better OCR on small text
     const fullViewport = page.getViewport({ scale: renderScale });
 
     const fullCanvas = document.createElement('canvas');
@@ -130,7 +130,9 @@ export async function cropRegion(file, pageNum, region, canvasWidth, canvasHeigh
         imageData: cropCanvas.toDataURL('image/png'),
         pdfBounds,
         pageWidth: viewport.width,
-        pageHeight: viewport.height
+        pageHeight: viewport.height,
+        width: cropW,
+        height: cropH
     };
 }
 

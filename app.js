@@ -7,6 +7,7 @@ import { renderPagePreview, getPageCount, cropRegion } from './pdf-parser.js';
 import { generatePPTXFromRegions } from './pptx-generator.js';
 import { formatFileSize, downloadBlob, isValidPDF, generateOutputFileName, showError } from './utils.js';
 import { RegionEditor } from './region-editor.js';
+import { AutoDetector } from './auto-detector.js';
 
 // ===== State =====
 const state = {
@@ -33,6 +34,7 @@ const elements = {
 
     // Toolbar
     btnBack: document.getElementById('btnBack'),
+    btnAutoDetect: document.getElementById('btnAutoDetect'),
     btnTextMode: document.getElementById('btnTextMode'),
     btnImageMode: document.getElementById('btnImageMode'),
     btnClearPage: document.getElementById('btnClearPage'),
@@ -79,6 +81,7 @@ function setupEventListeners() {
 
     // Toolbar
     elements.btnBack.addEventListener('click', resetApp);
+    elements.btnAutoDetect.addEventListener('click', runAutoDetect);
     elements.btnTextMode.addEventListener('click', () => setMode('text'));
     elements.btnImageMode.addEventListener('click', () => setMode('image'));
     elements.btnClearPage.addEventListener('click', clearCurrentPage);
@@ -211,6 +214,51 @@ async function navigatePage(delta) {
     await renderCurrentPage();
 }
 
+// ===== Auto Detection =====
+async function runAutoDetect() {
+    if (!state.file || !state.regionEditor) return;
+
+    console.log('[App] Starting auto-detection for page', state.currentPage);
+
+    // Disable button during detection
+    elements.btnAutoDetect.disabled = true;
+    elements.btnAutoDetect.textContent = '⏳ 検出中...';
+
+    try {
+        const detector = new AutoDetector();
+        const detectedRegions = await detector.detectRegions(elements.pdfCanvas);
+
+        if (detectedRegions.length === 0) {
+            showError('パーツが検出されませんでした');
+            return;
+        }
+
+        // Clear current page regions first
+        state.regionEditor.clearCurrentPage();
+
+        // Add detected regions to the editor
+        for (const region of detectedRegions) {
+            // Re-add with proper numbering through the editor
+            state.regionEditor.mode = region.type;
+            state.regionEditor.addRegion({
+                x: region.x,
+                y: region.y,
+                width: region.width,
+                height: region.height
+            });
+        }
+
+        console.log(`[App] Auto-detected ${detectedRegions.length} regions`);
+
+    } catch (err) {
+        console.error('[App] Auto-detection failed:', err);
+        showError('自動検出に失敗しました');
+    } finally {
+        elements.btnAutoDetect.disabled = false;
+        elements.btnAutoDetect.textContent = '✨ 自動検出';
+    }
+}
+
 // ===== Mode Switching =====
 function setMode(mode) {
     if (state.regionEditor) {
@@ -253,19 +301,23 @@ function updateRegionList(allRegions) {
             const icon = region.type === 'text' ? '🔤' : '🖼️';
             const typeLabel = region.type === 'text' ? 'テキスト' : '画像';
             const number = region.number || '?';
+            const toggleIcon = region.type === 'text' ? '🖼️' : '🔤';
 
             item.innerHTML = `
                 <span class="region-label">
                     <span class="region-number">${number}</span>
                     ${icon} ${typeLabel}
                 </span>
-                <button class="region-delete" data-id="${region.id}" title="削除">✕</button>
+                <span class="region-actions">
+                    <button class="region-toggle" data-id="${region.id}" title="タイプ変更">${toggleIcon}</button>
+                    <button class="region-delete" data-id="${region.id}" title="削除">✕</button>
+                </span>
             `;
 
-            // Click item to highlight on canvas
+            // Click item to highlight on canvas and scroll to it
             item.addEventListener('click', async (e) => {
-                // Don't trigger if clicking delete button
-                if (e.target.classList.contains('region-delete')) return;
+                // Don't trigger if clicking action buttons
+                if (e.target.closest('.region-actions')) return;
 
                 // Navigate to page if needed
                 if (parseInt(page) !== state.currentPage) {
@@ -279,8 +331,17 @@ function updateRegionList(allRegions) {
                     state.regionEditor.highlightRegion(region.id);
                 }
 
-                // Highlight list item
+                // Highlight list item and scroll into view
                 highlightListItem(item);
+                item.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            });
+
+            // Toggle type button handler
+            item.querySelector('.region-toggle').addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (state.regionEditor) {
+                    state.regionEditor.toggleRegionType(region.id);
+                }
             });
 
             // Delete button handler
